@@ -3,3 +3,5 @@ venv/
 .idea
 .claude/
 */.env.local
+**/.env
+**/__pycache__/**

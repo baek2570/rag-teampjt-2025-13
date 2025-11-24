@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  # RAG Backend API 서버
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_PROXY_URL=${OPENAI_PROXY_URL}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_SEARCH_ENGINE_ID=${GOOGLE_SEARCH_ENGINE_ID}
+      - HOST=0.0.0.0
+      - PORT=8000
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - rag-network
+
+  # RAG Frontend 웹 인터페이스
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+networks:
+  rag-network:
+    driver: bridge
+
+# 환경 변수 파일 예시
+# .env 파일을 프로젝트 루트에 생성하세요:
+# OPENAI_API_KEY=your_openai_api_key_here
+# OPENAI_PROXY_URL=optional_proxy_url

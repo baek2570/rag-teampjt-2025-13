@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced RAG Chatbot</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .chat-container {
+            width: 90%;
+            max-width: 800px;
+            height: 80vh;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .chat-header h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+
+        .chat-header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .status-bar {
+            background: #f8f9fa;
+            padding: 10px 20px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #28a745;
+        }
+
+        .status-dot.error {
+            background: #dc3545;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            scroll-behavior: smooth;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .message.user .message-avatar {
+            background: #007bff;
+        }
+
+        .message.assistant .message-avatar {
+            background: #28a745;
+        }
+
+        .message-content {
+            max-width: 70%;
+            padding: 15px 20px;
+            border-radius: 18px;
+            line-height: 1.4;
+        }
+
+        .message.user .message-content {
+            background: #007bff;
+            color: white;
+        }
+
+        .message.assistant .message-content {
+            background: #f8f9fa;
+            color: #333;
+            border: 1px solid #e9ecef;
+        }
+
+        .message-meta {
+            font-size: 11px;
+            opacity: 0.7;
+            margin-top: 8px;
+        }
+
+        .search-info {
+            background: #e3f2fd;
+            border: 1px solid #bbdefb;
+            border-radius: 8px;
+            padding: 10px;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+
+        .search-info-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #1976d2;
+        }
+
+        .search-stats {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .stat-icon {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+        .stat-icon.internal { background: #4caf50; }
+        .stat-icon.google { background: #ff9800; }
+        .stat-icon.arxiv { background: #9c27b0; }
+
+        .chat-input-container {
+            padding: 20px;
+            border-top: 1px solid #e9ecef;
+            background: #f8f9fa;
+        }
+
+        .chat-input-wrapper {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 15px 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 25px;
+            font-size: 16px;
+            resize: none;
+            max-height: 100px;
+            font-family: inherit;
+        }
+
+        .chat-input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+
+        .send-button {
+            padding: 15px 25px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        .send-button:hover:not(:disabled) {
+            background: #0056b3;
+        }
+
+        .send-button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #6c757d;
+            font-style: italic;
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+        }
+
+        .typing-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #6c757d;
+            animation: typing 1.5s infinite ease-in-out;
+        }
+
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        .error-message {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>🤖 Enhanced RAG Chatbot</h1>
+            <p>내부 검색 우선, 외부 검색 폴백 지원</p>
+        </div>
+        
+        <div class="status-bar">
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">연결 확인 중...</span>
+            </div>
+            <div id="serverInfo">API 서버 대기 중</div>
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            <div class="message assistant">
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                    안녕하세요! Enhanced RAG 시스템입니다. 궁금한 것을 질문해 주세요.
+                    <div class="search-info">
+                        <div class="search-info-title">💡 검색 방식</div>
+                        <div>1️⃣ 내부 Elasticsearch에서 먼저 검색</div>
+                        <div>2️⃣ 결과가 없으면 Google/arXiv에서 추가 검색</div>
+                        <div>3️⃣ 모든 정보를 종합해서 답변 생성</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-container">
+            <div class="chat-input-wrapper">
+                <textarea 
+                    id="chatInput" 
+                    class="chat-input" 
+                    placeholder="질문을 입력하세요..." 
+                    rows="1"
+                    maxlength="1000"
+                ></textarea>
+                <button id="sendButton" class="send-button">전송</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class RAGChatbot {
+            constructor() {
+                this.apiUrl = window.location.protocol + '//' + window.location.hostname + ':8000';
+                this.messagesContainer = document.getElementById('chatMessages');
+                this.chatInput = document.getElementById('chatInput');
+                this.sendButton = document.getElementById('sendButton');
+                this.statusDot = document.getElementById('statusDot');
+                this.statusText = document.getElementById('statusText');
+                this.serverInfo = document.getElementById('serverInfo');
+                
+                this.init();
+            }
+
+            init() {
+                this.checkServerHealth();
+                this.setupEventListeners();
+                
+                // 5초마다 서버 상태 확인
+                setInterval(() => this.checkServerHealth(), 5000);
+            }
+
+            setupEventListeners() {
+                this.sendButton.addEventListener('click', () => this.sendMessage());
+                
+                this.chatInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        this.sendMessage();
+                    }
+                });
+
+                this.chatInput.addEventListener('input', () => {
+                    this.chatInput.style.height = 'auto';
+                    this.chatInput.style.height = Math.min(this.chatInput.scrollHeight, 100) + 'px';
+                });
+            }
+
+            async checkServerHealth() {
+                try {
+                    const response = await fetch(`${this.apiUrl}/health`);
+                    const health = await response.json();
+                    
+                    if (health.rag_system_ready) {
+                        this.setStatus('connected', '시스템 준비됨');
+                        this.serverInfo.textContent = 'RAG 시스템 활성화';
+                    } else {
+                        this.setStatus('error', '시스템 오류');
+                        this.serverInfo.textContent = health.message;
+                    }
+                } catch (error) {
+                    this.setStatus('error', '서버 연결 실패');
+                    this.serverInfo.textContent = `${this.apiUrl} 연결 불가`;
+                }
+            }
+
+            setStatus(status, message) {
+                this.statusDot.className = `status-dot ${status === 'error' ? 'error' : ''}`;
+                this.statusText.textContent = message;
+            }
+
+            async sendMessage() {
+                const question = this.chatInput.value.trim();
+                if (!question) return;
+
+                // 사용자 메시지 추가
+                this.addMessage('user', question);
+                this.chatInput.value = '';
+                this.chatInput.style.height = 'auto';
+
+                // 로딩 메시지 추가
+                const loadingId = this.addLoadingMessage();
+
+                try {
+                    const response = await fetch(`${this.apiUrl}/ask`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ question: question })
+                    });
+
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || 'API 오류');
+                    }
+
+                    const result = await response.json();
+                    
+                    // 로딩 메시지 제거
+                    this.removeMessage(loadingId);
+                    
+                    // 응답 메시지 추가
+                    this.addMessage('assistant', result.answer, {
+                        optimized_query: result.optimized_query,
+                        search_route: result.search_route,
+                        sources: {
+                            internal: result.internal_source_count,
+                            google: result.google_source_count,
+                            arxiv: result.arxiv_source_count
+                        }
+                    });
+
+                } catch (error) {
+                    console.error('API 오류:', error);
+                    this.removeMessage(loadingId);
+                    this.addMessage('assistant', `오류가 발생했습니다: ${error.message}`, null, true);
+                }
+            }
+
+            addMessage(sender, content, metadata = null, isError = false) {
+                const messageId = 'msg_' + Date.now();
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${sender}`;
+                messageDiv.id = messageId;
+
+                const avatar = sender === 'user' ? '👤' : '🤖';
+                const timestamp = new Date().toLocaleTimeString();
+
+                let metadataHtml = '';
+                if (metadata && !isError) {
+                    const totalSources = metadata.sources.internal + metadata.sources.google + metadata.sources.arxiv;
+                    metadataHtml = `
+                        <div class="search-info">
+                            <div class="search-info-title">🔍 검색 정보</div>
+                            <div>최적화된 쿼리: "${metadata.optimized_query}"</div>
+                            <div>검색 경로: ${metadata.search_route || 'internal → external'}</div>
+                            <div class="search-stats">
+                                <div class="stat-item">
+                                    <div class="stat-icon internal"></div>
+                                    <span>내부 ${metadata.sources.internal}개</span>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-icon google"></div>
+                                    <span>Google ${metadata.sources.google}개</span>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-icon arxiv"></div>
+                                    <span>arXiv ${metadata.sources.arxiv}개</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                messageDiv.innerHTML = `
+                    <div class="message-avatar">${avatar}</div>
+                    <div class="message-content ${isError ? 'error-message' : ''}">
+                        ${content}
+                        ${metadataHtml}
+                        <div class="message-meta">${timestamp}</div>
+                    </div>
+                `;
+
+                this.messagesContainer.appendChild(messageDiv);
+                this.scrollToBottom();
+                return messageId;
+            }
+
+            addLoadingMessage() {
+                const messageId = 'loading_' + Date.now();
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message assistant';
+                messageDiv.id = messageId;
+
+                messageDiv.innerHTML = `
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-content loading">
+                        <span>검색 중</span>
+                        <div class="typing-indicator">
+                            <div class="typing-dot"></div>
+                            <div class="typing-dot"></div>
+                            <div class="typing-dot"></div>
+                        </div>
+                    </div>
+                `;
+
+                this.messagesContainer.appendChild(messageDiv);
+                this.scrollToBottom();
+                return messageId;
+            }
+
+            removeMessage(messageId) {
+                const message = document.getElementById(messageId);
+                if (message) {
+                    message.remove();
+                }
+            }
+
+            scrollToBottom() {
+                this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+            }
+        }
+
+        // 페이지 로드 시 챗봇 초기화
+        document.addEventListener('DOMContentLoaded', () => {
+            new RAGChatbot();
+        });
+    </script>
+</body>
+</html>
