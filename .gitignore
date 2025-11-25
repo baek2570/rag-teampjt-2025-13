@@ -5,3 +5,4 @@ data/models/vocabulary.json
 data/test.txt
 data/search_example.ipynb
 data/pdf_chunks.csv
+.env
