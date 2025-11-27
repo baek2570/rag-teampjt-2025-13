@@ -19,6 +19,9 @@ class EnhancedRAGState(TypedDict):
     retrieved_docs: List[Dict[str, Any]]
     google_results: List[Dict[str, Any]]
     arxiv_results: List[Dict[str, Any]]
+    internal_relevance_score: float
+    needs_external_search: bool
+    external_search_type: str
     context: str
     answer: str
     messages: List[Any]
@@ -49,22 +52,37 @@ class EnhancedRAGGraph:
             검색 쿼리:"""),
         ])
         
-        self.search_router_prompt = ChatPromptTemplate.from_messages([
-            ("system", """당신은 질문의 특성을 분석하여 최적의 검색 방법을 결정하는 전문가입니다.
+        self.relevance_evaluator_prompt = ChatPromptTemplate.from_messages([
+            ("system", """당신은 검색 결과가 질문에 얼마나 적합한지 평가하는 전문가입니다.
             
-            다음 중 하나를 선택하세요:
+            내부 검색 결과를 보고 사용자의 질문에 대답하기에 충분한지 평가하세요.
             
-            'internal': 
-            - Elastic Search 와 관련된 질문
-            - RAG와 관련된 질문
+            평가 기준:
+            1. 검색 결과가 질문과 직접적으로 관련이 있는가?
+            2. 질문에 답하기 위한 충분한 정보가 포함되어 있는가?
+            3. 정보의 품질이 답변 생성에 적합한가?
             
-            'google': 웹 검색이 필요한 경우
+            0~10점으로 평가하고, 5점 이하면 외부 검색이 필요합니다.
+            
+            질문: {question}
+            
+            검색 결과:
+            {search_results}
+            
+            평가 점수만 숫자로 답하세요 (예: 7):"""),
+        ])
+        
+        self.external_search_router_prompt = ChatPromptTemplate.from_messages([
+            ("system", """내부 검색 결과가 충분하지 않아 외부 검색이 필요합니다.
+            질문의 특성을 분석하여 Google 검색과 arXiv 검색 중 어느 것이 더 적합한지 결정하세요.
+            
+            'google': 웹 검색이 적합한 경우
             - 최신 정보나 뉴스가 필요한 질문
             - 실시간 데이터나 현재 상황에 대한 질문
             - 특정 기업이나 제품의 최신 정보
             - 일반적인 웹 정보가 도움이 될 수 있는 질문
             
-            'arxiv': 학술 논문 검색이 필요한 경우
+            'arxiv': 학술 논문 검색이 적합한 경우
             - 최신 연구 결과나 학술적 내용
             - 특정 알고리즘이나 기술의 연구 동향
             - 논문이나 연구 결과가 필요한 질문
@@ -72,7 +90,7 @@ class EnhancedRAGGraph:
             
             질문: {question}
             
-            어떤 검색 방법이 가장 적합한가요? (internal/google/arxiv):"""),
+            어떤 외부 검색이 더 적합한가요? (google/arxiv):"""),
         ])
         
         self.generation_prompt = ChatPromptTemplate.from_messages([
@@ -101,27 +119,37 @@ class EnhancedRAGGraph:
         workflow = StateGraph(EnhancedRAGState)
         
         workflow.add_node("query_optimization", self.optimize_query)
-        workflow.add_node("search_routing", self.route_search_method)
         workflow.add_node("internal_search", self.search_internal_only)
-        workflow.add_node("google_search", self.search_google_only)
-        workflow.add_node("arxiv_search", self.search_arxiv_only)
+        workflow.add_node("relevance_evaluation", self.evaluate_relevance)
+        workflow.add_node("external_search_routing", self.route_external_search)
+        workflow.add_node("google_search", self.search_google_additional)
+        workflow.add_node("arxiv_search", self.search_arxiv_additional)
         workflow.add_node("generation", self.generate_answer)
         
         workflow.set_entry_point("query_optimization")
-        workflow.add_edge("query_optimization", "search_routing")
+        workflow.add_edge("query_optimization", "internal_search")
+        workflow.add_edge("internal_search", "relevance_evaluation")
         
-        # 3-way 조건부 라우팅
+        # 관련성 평가 후 조건부 라우팅
         workflow.add_conditional_edges(
-            "search_routing",
-            self.route_to_search_method,
+            "relevance_evaluation",
+            self.decide_next_step,
             {
-                "internal": "internal_search",
+                "sufficient": "generation",
+                "need_external": "external_search_routing"
+            }
+        )
+        
+        # 외부 검색 타입 결정
+        workflow.add_conditional_edges(
+            "external_search_routing",
+            self.route_to_external_search,
+            {
                 "google": "google_search",
                 "arxiv": "arxiv_search"
             }
         )
         
-        workflow.add_edge("internal_search", "generation")
         workflow.add_edge("google_search", "generation")
         workflow.add_edge("arxiv_search", "generation")
         workflow.add_edge("generation", END)
@@ -142,28 +170,74 @@ class EnhancedRAGGraph:
             state["optimized_query"] = state["question"]
             return state
     
-    def route_search_method(self, state: EnhancedRAGState) -> EnhancedRAGState:
-        """검색 방법 결정"""
+    def evaluate_relevance(self, state: EnhancedRAGState) -> EnhancedRAGState:
+        """내부 검색 결과의 관련성 평가"""
         try:
-            prompt = self.search_router_prompt.format(question=state["question"])
-            response = self.llm.invoke([HumanMessage(content=prompt)])
-            route = response.content.strip().lower()
+            # 검색 결과를 텍스트로 포맷팅
+            if state["retrieved_docs"]:
+                search_results_text = "\n\n".join([
+                    f"[문서 {i+1}] (점수: {doc['score']:.3f})\n{doc['chunk_text']}"
+                    for i, doc in enumerate(state["retrieved_docs"])
+                ])
+            else:
+                search_results_text = "검색 결과가 없습니다."
             
-            # 유효한 라우트인지 확인
-            valid_routes = ['internal', 'google', 'arxiv']
-            if route not in valid_routes:
-                route = 'internal'  # 기본값
+            prompt = self.relevance_evaluator_prompt.format(
+                question=state["question"],
+                search_results=search_results_text
+            )
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            
+            try:
+                score = float(response.content.strip())
+                score = max(0, min(10, score))  # 0~10 범위로 제한
+            except ValueError:
+                score = 3.0  # 파싱 실패 시 기본값
+            
+            state["internal_relevance_score"] = score
+            state["needs_external_search"] = score <= 5.0
+            
+            if score > 5.0:
+                state["search_route"] = "internal_sufficient"
+            else:
+                state["search_route"] = "need_external"
                 
-            state["search_route"] = route
             return state
         except Exception as e:
-            print(f"Search routing error: {e}")
-            state["search_route"] = "internal"
+            print(f"Relevance evaluation error: {e}")
+            state["internal_relevance_score"] = 3.0
+            state["needs_external_search"] = True
+            state["search_route"] = "need_external"
             return state
     
-    def route_to_search_method(self, state: EnhancedRAGState) -> str:
-        """라우팅 결정에 따른 분기"""
-        return state.get("search_route", "internal")
+    def decide_next_step(self, state: EnhancedRAGState) -> str:
+        """관련성 평가 결과에 따른 다음 단계 결정"""
+        if state.get("needs_external_search", True):
+            return "need_external"
+        else:
+            return "sufficient"
+    
+    def route_external_search(self, state: EnhancedRAGState) -> EnhancedRAGState:
+        """외부 검색 타입 결정"""
+        try:
+            prompt = self.external_search_router_prompt.format(question=state["question"])
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            external_type = response.content.strip().lower()
+            
+            # 유효한 외부 검색 타입인지 확인
+            if external_type not in ['google', 'arxiv']:
+                external_type = 'google'  # 기본값
+                
+            state["external_search_type"] = external_type
+            return state
+        except Exception as e:
+            print(f"External search routing error: {e}")
+            state["external_search_type"] = "google"
+            return state
+    
+    def route_to_external_search(self, state: EnhancedRAGState) -> str:
+        """외부 검색 타입에 따른 분기"""
+        return state.get("external_search_type", "google")
     
     def search_internal_only(self, state: EnhancedRAGState) -> EnhancedRAGState:
         """내부 Elasticsearch에서만 검색"""
@@ -182,46 +256,36 @@ class EnhancedRAGGraph:
             state["arxiv_results"] = []
             return state
     
-    def search_google_only(self, state: EnhancedRAGState) -> EnhancedRAGState:
-        """내부 검색 + Google 검색"""
+    def search_google_additional(self, state: EnhancedRAGState) -> EnhancedRAGState:
+        """Google 검색 추가 수행 (내부 검색은 이미 완료됨)"""
         try:
             query = state.get("optimized_query", state["question"])
-            
-            # 내부 검색
-            retrieved_docs = self.es_client.internal_search(query)
             
             # Google 검색
             google_results = self.search_manager.google_tool.search(query, num_results=5)
             
-            state["retrieved_docs"] = retrieved_docs
             state["google_results"] = google_results
             state["arxiv_results"] = []
             return state
         except Exception as e:
             print(f"Google search error: {e}")
-            state["retrieved_docs"] = []
             state["google_results"] = []
             state["arxiv_results"] = []
             return state
     
-    def search_arxiv_only(self, state: EnhancedRAGState) -> EnhancedRAGState:
-        """내부 검색 + arXiv 검색"""
+    def search_arxiv_additional(self, state: EnhancedRAGState) -> EnhancedRAGState:
+        """arXiv 검색 추가 수행 (내부 검색은 이미 완료됨)"""
         try:
             query = state.get("optimized_query", state["question"])
-            
-            # 내부 검색
-            retrieved_docs = self.es_client.internal_search(query)
             
             # arXiv 검색
             arxiv_results = self.search_manager.arxiv_tool.search(query, max_results=5)
             
-            state["retrieved_docs"] = retrieved_docs
             state["google_results"] = []
             state["arxiv_results"] = arxiv_results
             return state
         except Exception as e:
             print(f"ArXiv search error: {e}")
-            state["retrieved_docs"] = []
             state["google_results"] = []
             state["arxiv_results"] = []
             return state
@@ -308,6 +372,9 @@ class EnhancedRAGGraph:
             retrieved_docs=[],
             google_results=[],
             arxiv_results=[],
+            internal_relevance_score=0.0,
+            needs_external_search=False,
+            external_search_type="",
             context="",
             answer="",
             messages=[]

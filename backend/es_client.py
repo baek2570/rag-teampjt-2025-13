@@ -5,27 +5,51 @@ api_id = "VR-wlpoBpE2dlQuNl5eB"
 api_key = "Bj6KJAUz1Yha5y6CgeYtrQ"
 model_id = "intfloat__multilingual-e5-base"
 
+
 class EsClient:
     client = Elasticsearch(
         url,
         api_key=(api_id, api_key)
     )
 
-    def internal_search(self, query):
-        response = self.client.search(
-            index="class-info",
-            knn={
-                "field": "chunk_embedding.predicted_value",
-                "query_vector_builder": {
-                    "text_embedding": {
-                        "model_id": model_id,
-                        "model_text": f"query: {query}"
-                    }
-                },
-                "k": 5,
-                "num_candidates": 20,
-            }
-        )
+    def internal_search(self, query, top_k=5):
+        search_kwargs = {
+            "index": "class-info",
+            "retriever": {
+                "rrf": {
+                    "rank_window_size": 50,
+                    "rank_constant": 60,
+                    "retrievers": [
+                        {
+                            "knn": {
+                                "field": "chunk_embedding.predicted_value",
+                                "k": top_k,
+                                "num_candidates": 20,
+                                "query_vector_builder": {
+                                    "text_embedding": {
+                                        "model_id": model_id,
+                                        "model_text": f"query: {query}"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "standard": {
+                                "query": {
+                                    "match": {
+                                        "chunk_text": {
+                                            "query": query
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            "_source": {"exclude_vectors": True}
+        }
+        response = self.client.search(**search_kwargs)
 
         formatted_results = []
         for hit in response["hits"]["hits"]:
