@@ -6,3 +6,8 @@ data/test.txt
 data/search_example.ipynb
 data/pdf_chunks.csv
 .env
+.idea
+.claude/
+*/.env.local
+**/.env
+**/__pycache__/**
