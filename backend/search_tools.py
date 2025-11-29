@@ -1,9 +1,7 @@
 import requests
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
-import time
 from urllib.parse import quote_plus
-import json
 
 class GoogleSearchTool:
     """구글 검색 API를 통한 웹 검색 도구"""

@@ -49,6 +49,7 @@ class EnhancedRAGGraph:
             3. 검색에 도움이 되는 관련 용어나 동의어를 포함하세요
             4. 이전 대화에서 언급된 관련 키워드도 고려하세요
             5. 쿼리는 간결하고 명확해야 합니다
+            6. 쿼리는 영어로 작성하세요
             
             이전 대화 맥락:
             {session_context}
@@ -191,7 +192,7 @@ class EnhancedRAGGraph:
             # 검색 결과를 텍스트로 포맷팅
             if state["retrieved_docs"]:
                 search_results_text = "\n\n".join([
-                    f"[문서 {i+1}] (점수: {doc['score']:.3f})\n{doc['chunk_text']}"
+                    f"[문서 {i+1}] \n{doc['chunk_text']}"
                     for i, doc in enumerate(state["retrieved_docs"])
                 ])
             else:
@@ -281,6 +282,7 @@ class EnhancedRAGGraph:
             
             state["google_results"] = google_results
             state["arxiv_results"] = []
+            state["retrieved_docs"] = []
             return state
         except Exception as e:
             print(f"Google search error: {e}")
@@ -298,6 +300,7 @@ class EnhancedRAGGraph:
             
             state["google_results"] = []
             state["arxiv_results"] = arxiv_results
+            state["retrieved_docs"] = []
             return state
         except Exception as e:
             print(f"ArXiv search error: {e}")

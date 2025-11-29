@@ -1,8 +1,8 @@
 from elasticsearch import Elasticsearch
 
-url = "https://b675458383584374af04fcee51788385.us-central1.gcp.cloud.es.io"
-api_id = "VR-wlpoBpE2dlQuNl5eB"
-api_key = "Bj6KJAUz1Yha5y6CgeYtrQ"
+url = "https://a30a7c8ef0bf435a9d350006622225d8.us-central1.gcp.cloud.es.io"
+api_id = "7eFayZoBmaII0WM5wUsL"
+api_key = "OfRBOxIfnESpqgMSAP39Jw"
 model_id = "intfloat__multilingual-e5-base"
 
 
@@ -61,4 +61,4 @@ class EsClient:
             }
             formatted_results.append(result)
 
-        return formatted_results
+        return formatted_results[:top_k]
