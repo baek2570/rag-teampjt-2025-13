@@ -59,6 +59,36 @@
             font-size: 12px;
         }
 
+        .session-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .session-btn {
+            padding: 4px 8px;
+            border: 1px solid #dee2e6;
+            background: white;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .session-btn:hover {
+            background: #e9ecef;
+        }
+
+        .session-btn.primary {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+
+        .session-btn.primary:hover {
+            background: #0056b3;
+        }
+
         .status-indicator {
             display: flex;
             align-items: center;
@@ -273,7 +303,11 @@
                 <div class="status-dot" id="statusDot"></div>
                 <span id="statusText">연결 확인 중...</span>
             </div>
-            <div id="serverInfo">API 서버 대기 중</div>
+            <div class="session-controls">
+                <button id="newSessionBtn" class="session-btn primary">새 대화</button>
+                <button id="sessionStatsBtn" class="session-btn">통계</button>
+                <div id="serverInfo">API 서버 대기 중</div>
+            </div>
         </div>
 
         <div class="chat-messages" id="chatMessages">
@@ -315,6 +349,11 @@
                 this.statusDot = document.getElementById('statusDot');
                 this.statusText = document.getElementById('statusText');
                 this.serverInfo = document.getElementById('serverInfo');
+                this.newSessionBtn = document.getElementById('newSessionBtn');
+                this.sessionStatsBtn = document.getElementById('sessionStatsBtn');
+                
+                // 멀티턴 대화를 위한 세션 ID
+                this.sessionId = null;
                 
                 this.init();
             }
@@ -322,13 +361,38 @@
             init() {
                 this.checkServerHealth();
                 this.setupEventListeners();
+                this.createSession();
                 
                 // 5초마다 서버 상태 확인
                 setInterval(() => this.checkServerHealth(), 5000);
             }
 
+            async createSession() {
+                try {
+                    const response = await fetch(`${this.apiUrl}/session/create`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        this.sessionId = result.session_id;
+                        console.log(`🆕 새 세션 생성됨: ${this.sessionId}`);
+                        
+                        // 세션 ID를 상태바에 표시
+                        this.serverInfo.textContent = `세션: ${this.sessionId.substring(0, 8)}...`;
+                    }
+                } catch (error) {
+                    console.warn('세션 생성 실패, 자동 생성 모드 사용:', error);
+                }
+            }
+
             setupEventListeners() {
                 this.sendButton.addEventListener('click', () => this.sendMessage());
+                this.newSessionBtn.addEventListener('click', () => this.startNewSession());
+                this.sessionStatsBtn.addEventListener('click', () => this.showSessionStats());
                 
                 this.chatInput.addEventListener('keypress', (e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
@@ -384,7 +448,10 @@
                         headers: {
                             'Content-Type': 'application/json',
                         },
-                        body: JSON.stringify({ question: question })
+                        body: JSON.stringify({ 
+                            question: question,
+                            session_id: this.sessionId
+                        })
                     });
 
                     if (!response.ok) {
@@ -393,6 +460,13 @@
                     }
 
                     const result = await response.json();
+                    
+                    // 세션 ID 업데이트 (서버에서 새로 생성된 경우)
+                    if (result.session_id && result.session_id !== this.sessionId) {
+                        this.sessionId = result.session_id;
+                        this.serverInfo.textContent = `세션: ${this.sessionId.substring(0, 8)}...`;
+                        console.log(`🔄 세션 ID 업데이트: ${this.sessionId}`);
+                    }
                     
                     // 로딩 메시지 제거
                     this.removeMessage(loadingId);
@@ -496,6 +570,75 @@
 
             scrollToBottom() {
                 this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+            }
+
+            async startNewSession() {
+                try {
+                    // 이전 세션 삭제 (실패해도 계속 진행)
+                    if (this.sessionId) {
+                        try {
+                            await fetch(`${this.apiUrl}/session/${this.sessionId}`, {
+                                method: 'DELETE'
+                            });
+                        } catch (error) {
+                            console.warn('이전 세션 삭제 실패:', error);
+                        }
+                    }
+
+                    // 새 세션 생성
+                    await this.createSession();
+                    
+                    // 채팅 메시지 초기화
+                    this.messagesContainer.innerHTML = `
+                        <div class="message assistant">
+                            <div class="message-avatar">🤖</div>
+                            <div class="message-content">
+                                안녕하세요! 새로운 대화를 시작합니다. 궁금한 것을 질문해 주세요.
+                                <div class="search-info">
+                                    <div class="search-info-title">💡 검색 방식</div>
+                                    <div>1️⃣ 내부 Elasticsearch에서 먼저 검색</div>
+                                    <div>2️⃣ 결과가 없으면 Google/arXiv에서 추가 검색</div>
+                                    <div>3️⃣ 모든 정보를 종합해서 답변 생성</div>
+                                    <div>4️⃣ 이전 대화 맥락을 고려한 연속적 대화</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    console.log('🔄 새 대화 세션 시작됨');
+                } catch (error) {
+                    console.error('새 세션 시작 실패:', error);
+                    this.addMessage('assistant', '새 대화를 시작하는 중 오류가 발생했습니다.', null, true);
+                }
+            }
+
+            async showSessionStats() {
+                try {
+                    const response = await fetch(`${this.apiUrl}/session/stats`);
+                    if (!response.ok) {
+                        throw new Error('통계 조회 실패');
+                    }
+                    
+                    const result = await response.json();
+                    const stats = result.session_stats;
+                    
+                    const statsMessage = `
+                        📊 시스템 통계
+                        • 활성 세션: ${stats.active_sessions}개
+                        • 총 메시지: ${stats.total_messages}개
+                        • 세션 타임아웃: ${Math.floor(stats.session_timeout / 60)}분
+                    `;
+                    
+                    this.addMessage('assistant', statsMessage, {
+                        optimized_query: '시스템 통계',
+                        search_route: 'internal_stats',
+                        sources: { internal: 0, google: 0, arxiv: 0 }
+                    });
+                    
+                } catch (error) {
+                    console.error('세션 통계 조회 실패:', error);
+                    this.addMessage('assistant', '세션 통계를 조회하는 중 오류가 발생했습니다.', null, true);
+                }
             }
         }
 

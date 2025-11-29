@@ -1,10 +1,10 @@
-from typing import List, Dict, Any, TypedDict
+from typing import List, Dict, Any, TypedDict, Optional
 import os
 from dotenv import load_dotenv
 
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
 
 from es_client import EsClient
@@ -25,6 +25,8 @@ class EnhancedRAGState(TypedDict):
     context: str
     answer: str
     messages: List[Any]
+    conversation_history: List[BaseMessage]
+    session_context: str
 
 class EnhancedRAGGraph:
     def __init__(self, google_api_key: str = None, google_search_engine_id: str = None):
@@ -39,15 +41,19 @@ class EnhancedRAGGraph:
         
         self.retrieval_prompt = ChatPromptTemplate.from_messages([
             ("system", """당신은 질문을 분석하여 검색에 최적화된 쿼리를 생성하는 전문가입니다.
-            사용자의 질문을 받아서 검색할 수 있는 효과적인 쿼리를 생성하세요.
+            사용자의 질문과 이전 대화 맥락을 고려하여 검색할 수 있는 효과적인 쿼리를 생성하세요.
             
             규칙:
             1. 핵심 키워드를 추출하세요
             2. 불필요한 조사나 어미는 제거하세요
             3. 검색에 도움이 되는 관련 용어나 동의어를 포함하세요
-            4. 쿼리는 간결하고 명확해야 합니다
+            4. 이전 대화에서 언급된 관련 키워드도 고려하세요
+            5. 쿼리는 간결하고 명확해야 합니다
             
-            질문: {question}
+            이전 대화 맥락:
+            {session_context}
+            
+            현재 질문: {question}
             
             검색 쿼리:"""),
         ])
@@ -95,17 +101,22 @@ class EnhancedRAGGraph:
         
         self.generation_prompt = ChatPromptTemplate.from_messages([
             ("system", """당신은 도움이 되는 AI 어시스턴트입니다. 
-            주어진 컨텍스트를 바탕으로 사용자의 질문에 정확하고 유용한 답변을 제공하세요.
+            주어진 컨텍스트와 이전 대화 내용을 바탕으로 사용자의 질문에 정확하고 유용한 답변을 제공하세요.
             
             규칙:
             1. 내부 문서와 외부 검색 결과를 모두 활용하세요
             2. 정보의 출처를 명확히 구분하세요 (내부 자료 vs 웹 검색 vs 학술 논문)
-            3. 확실하지 않은 정보는 추측하지 마세요
-            4. 답변은 친근하고 이해하기 쉽게 작성하세요
-            5. 필요한 경우 링크나 참고자료를 제공하세요
-            6. 컨텍스트에 관련 정보가 없으면 그렇게 말하세요
+            3. 이전 대화 맥락을 고려하여 일관성 있는 답변을 하세요
+            4. 확실하지 않은 정보는 추측하지 마세요
+            5. 답변은 친근하고 이해하기 쉽게 작성하세요
+            6. 필요한 경우 링크나 참고자료를 제공하세요
+            7. 컨텍스트에 관련 정보가 없으면 그렇게 말하세요
+            8. 이전 대화에서 답변한 내용과 연관성이 있으면 언급하세요
             
-            컨텍스트:
+            이전 대화 맥락:
+            {session_context}
+            
+            현재 검색 컨텍스트:
             {context}
             
             질문: {question}
@@ -159,7 +170,11 @@ class EnhancedRAGGraph:
     def optimize_query(self, state: EnhancedRAGState) -> EnhancedRAGState:
         """질문을 검색에 최적화된 쿼리로 변환"""
         try:
-            prompt = self.retrieval_prompt.format(question=state["question"])
+            session_context = state.get("session_context", "이전 대화 없음")
+            prompt = self.retrieval_prompt.format(
+                question=state["question"],
+                session_context=session_context
+            )
             response = self.llm.invoke([HumanMessage(content=prompt)])
             optimized_query = response.content.strip()
             
@@ -339,9 +354,11 @@ class EnhancedRAGGraph:
             state["context"] = context
             
             # 답변 생성
+            session_context = state.get("session_context", "이전 대화 없음")
             prompt = self.generation_prompt.format(
                 context=context,
-                question=state["question"]
+                question=state["question"],
+                session_context=session_context
             )
             
             response = self.llm.invoke([HumanMessage(content=prompt)])
@@ -363,8 +380,8 @@ class EnhancedRAGGraph:
             state["answer"] = "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
             return state
     
-    def ask(self, question: str) -> Dict[str, Any]:
-        """향상된 RAG 파이프라인 실행"""
+    def ask(self, question: str, conversation_history: Optional[List[BaseMessage]] = None, session_context: str = "") -> Dict[str, Any]:
+        """향상된 RAG 파이프라인 실행 (멀티턴 대화 지원)"""
         initial_state = EnhancedRAGState(
             question=question,
             optimized_query="",
@@ -377,7 +394,9 @@ class EnhancedRAGGraph:
             external_search_type="",
             context="",
             answer="",
-            messages=[]
+            messages=[],
+            conversation_history=conversation_history or [],
+            session_context=session_context
         )
         
         result = self.graph.invoke(initial_state)
@@ -393,5 +412,7 @@ class EnhancedRAGGraph:
             "arxiv_results": result["arxiv_results"],
             "internal_source_count": len(result["retrieved_docs"]),
             "google_source_count": len(result["google_results"]),
-            "arxiv_source_count": len(result["arxiv_results"])
+            "arxiv_source_count": len(result["arxiv_results"]),
+            "conversation_history": result.get("conversation_history", []),
+            "session_context": result.get("session_context", "")
         }
