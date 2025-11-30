@@ -9,11 +9,19 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from es_client import EsClient
 from search_tools import SearchToolsManager
+from improved_prompts import (
+    INTENT_DETECTION_SYSTEM,
+    QUERY_OPTIMIZATION_SYSTEM,
+    RELEVANCE_EVALUATION_SYSTEM,
+    EXTERNAL_SEARCH_ROUTER_SYSTEM,
+    ANSWER_GENERATION_SYSTEM
+)
 
 load_dotenv()
 
 class EnhancedRAGState(TypedDict):
     question: str
+    user_intent: str
     optimized_query: str
     search_route: str
     retrieved_docs: List[Dict[str, Any]]
@@ -38,98 +46,33 @@ class EnhancedRAGGraph:
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_PROXY_URL")
         )
-        
+
+        self.intent_detection_prompt = ChatPromptTemplate.from_messages([
+            ("system", INTENT_DETECTION_SYSTEM),
+        ])
+
         self.retrieval_prompt = ChatPromptTemplate.from_messages([
-            ("system", """당신은 질문을 분석하여 검색에 최적화된 쿼리를 생성하는 전문가입니다.
-            사용자의 질문과 이전 대화 맥락을 고려하여 검색할 수 있는 효과적인 쿼리를 생성하세요.
-            
-            규칙:
-            1. 핵심 키워드를 추출하세요
-            2. 불필요한 조사나 어미는 제거하세요
-            3. 검색에 도움이 되는 관련 용어나 동의어를 포함하세요
-            4. 이전 대화에서 언급된 관련 키워드도 고려하세요
-            5. 쿼리는 간결하고 명확해야 합니다
-            6. 쿼리는 영어로 작성하세요
-            
-            이전 대화 맥락:
-            {session_context}
-            
-            현재 질문: {question}
-            
-            검색 쿼리:"""),
+            ("system", QUERY_OPTIMIZATION_SYSTEM),
         ])
-        
+
         self.relevance_evaluator_prompt = ChatPromptTemplate.from_messages([
-            ("system", """당신은 검색 결과가 질문에 얼마나 적합한지 평가하는 전문가입니다.
-            
-            내부 검색 결과를 보고 사용자의 질문에 대답하기에 충분한지 평가하세요.
-            
-            평가 기준:
-            1. 검색 결과가 질문과 직접적으로 관련이 있는가?
-            2. 질문에 답하기 위한 충분한 정보가 포함되어 있는가?
-            3. 정보의 품질이 답변 생성에 적합한가?
-            
-            0~10점으로 평가하고, 5점 이하면 외부 검색이 필요합니다.
-            
-            질문: {question}
-            
-            검색 결과:
-            {search_results}
-            
-            평가 점수만 숫자로 답하세요 (예: 7):"""),
+            ("system", RELEVANCE_EVALUATION_SYSTEM),
         ])
-        
+
         self.external_search_router_prompt = ChatPromptTemplate.from_messages([
-            ("system", """내부 검색 결과가 충분하지 않아 외부 검색이 필요합니다.
-            질문의 특성을 분석하여 Google 검색과 arXiv 검색 중 어느 것이 더 적합한지 결정하세요.
-            
-            'google': 웹 검색이 적합한 경우
-            - 최신 정보나 뉴스가 필요한 질문
-            - 실시간 데이터나 현재 상황에 대한 질문
-            - 특정 기업이나 제품의 최신 정보
-            - 일반적인 웹 정보가 도움이 될 수 있는 질문
-            
-            'arxiv': 학술 논문 검색이 적합한 경우
-            - 최신 연구 결과나 학술적 내용
-            - 특정 알고리즘이나 기술의 연구 동향
-            - 논문이나 연구 결과가 필요한 질문
-            - 학술적 근거가 필요한 기술적 질문
-            
-            질문: {question}
-            
-            어떤 외부 검색이 더 적합한가요? (google/arxiv):"""),
+            ("system", EXTERNAL_SEARCH_ROUTER_SYSTEM),
         ])
-        
+
         self.generation_prompt = ChatPromptTemplate.from_messages([
-            ("system", """당신은 도움이 되는 AI 어시스턴트입니다. 
-            주어진 컨텍스트와 이전 대화 내용을 바탕으로 사용자의 질문에 정확하고 유용한 답변을 제공하세요.
-            
-            규칙:
-            1. 내부 문서와 외부 검색 결과를 모두 활용하세요
-            2. 정보의 출처를 명확히 구분하세요 (내부 자료 vs 웹 검색 vs 학술 논문)
-            3. 이전 대화 맥락을 고려하여 일관성 있는 답변을 하세요
-            4. 확실하지 않은 정보는 추측하지 마세요
-            5. 답변은 친근하고 이해하기 쉽게 작성하세요
-            6. 필요한 경우 링크나 참고자료를 제공하세요
-            7. 컨텍스트에 관련 정보가 없으면 그렇게 말하세요
-            8. 이전 대화에서 답변한 내용과 연관성이 있으면 언급하세요
-            
-            이전 대화 맥락:
-            {session_context}
-            
-            현재 검색 컨텍스트:
-            {context}
-            
-            질문: {question}
-            
-            답변:"""),
+            ("system", ANSWER_GENERATION_SYSTEM),
         ])
         
         self.graph = self._build_graph()
     
     def _build_graph(self) -> StateGraph:
         workflow = StateGraph(EnhancedRAGState)
-        
+
+        workflow.add_node("intent_detection", self.detect_intent)
         workflow.add_node("query_optimization", self.optimize_query)
         workflow.add_node("internal_search", self.search_internal_only)
         workflow.add_node("relevance_evaluation", self.evaluate_relevance)
@@ -137,8 +80,9 @@ class EnhancedRAGGraph:
         workflow.add_node("google_search", self.search_google_additional)
         workflow.add_node("arxiv_search", self.search_arxiv_additional)
         workflow.add_node("generation", self.generate_answer)
-        
-        workflow.set_entry_point("query_optimization")
+
+        workflow.set_entry_point("intent_detection")
+        workflow.add_edge("intent_detection", "query_optimization")
         workflow.add_edge("query_optimization", "internal_search")
         workflow.add_edge("internal_search", "relevance_evaluation")
         
@@ -167,7 +111,25 @@ class EnhancedRAGGraph:
         workflow.add_edge("generation", END)
         
         return workflow.compile()
-    
+
+    def detect_intent(self, state: EnhancedRAGState) -> EnhancedRAGState:
+        """사용자의 검색 의도 파악"""
+        try:
+            prompt = self.intent_detection_prompt.format(question=state["question"])
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            intent = response.content.strip().lower()
+
+            valid_intents = ['explicit_google', 'explicit_arxiv', 'internal_only', 'flexible']
+            if intent not in valid_intents:
+                intent = 'flexible'
+
+            state["user_intent"] = intent
+            return state
+        except Exception as e:
+            print(f"Intent detection error: {e}")
+            state["user_intent"] = "flexible"
+            return state
+
     def optimize_query(self, state: EnhancedRAGState) -> EnhancedRAGState:
         """질문을 검색에 최적화된 쿼리로 변환"""
         try:
@@ -234,17 +196,32 @@ class EnhancedRAGGraph:
             return "sufficient"
     
     def route_external_search(self, state: EnhancedRAGState) -> EnhancedRAGState:
-        """외부 검색 타입 결정"""
+        """외부 검색 타입 결정 (user_intent 우선)"""
         try:
-            prompt = self.external_search_router_prompt.format(question=state["question"])
-            response = self.llm.invoke([HumanMessage(content=prompt)])
-            external_type = response.content.strip().lower()
-            
-            # 유효한 외부 검색 타입인지 확인
-            if external_type not in ['google', 'arxiv']:
-                external_type = 'google'  # 기본값
-                
-            state["external_search_type"] = external_type
+            user_intent = state.get("user_intent", "flexible")
+
+            # 사용자가 명시적으로 검색 도구를 요청한 경우
+            if user_intent == "explicit_google":
+                state["external_search_type"] = "google"
+            elif user_intent == "explicit_arxiv":
+                state["external_search_type"] = "arxiv"
+            elif user_intent == "internal_only":
+                # 내부 검색만 원하는 경우에도 외부 검색이 필요하다면 google을 기본으로
+                state["external_search_type"] = "google"
+            else:
+                # flexible인 경우 LLM이 판단
+                prompt = self.external_search_router_prompt.format(
+                    question=state["question"],
+                    user_intent=user_intent
+                )
+                response = self.llm.invoke([HumanMessage(content=prompt)])
+                external_type = response.content.strip().lower()
+
+                if external_type not in ['google', 'arxiv']:
+                    external_type = 'google'
+
+                state["external_search_type"] = external_type
+
             return state
         except Exception as e:
             print(f"External search routing error: {e}")
@@ -387,6 +364,7 @@ class EnhancedRAGGraph:
         """향상된 RAG 파이프라인 실행 (멀티턴 대화 지원)"""
         initial_state = EnhancedRAGState(
             question=question,
+            user_intent="",
             optimized_query="",
             search_route="",
             retrieved_docs=[],
@@ -403,9 +381,10 @@ class EnhancedRAGGraph:
         )
         
         result = self.graph.invoke(initial_state)
-        
+
         return {
             "question": result["question"],
+            "user_intent": result.get("user_intent", ""),
             "optimized_query": result.get("optimized_query", ""),
             "search_route": result.get("search_route", ""),
             "answer": result["answer"],
