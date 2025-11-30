@@ -86,6 +86,40 @@ ClassInsight는 여러분의 질문에 대해 가장 정확하고 유용한 답�
 - 백엔드와 프론트엔드가 독립적으로 운영
 - 자동 상태 확인과 복구 기능
 
+## ⚙️ 내부 검색 엔진 구성 (Elasticsearch)
+
+ClassInsight의 내부 문서 검색은 **Elastic Cloud** 환경에서 구축되었으며, 의미 기반 검색(Semantic Search)과 키워드 검색(Keyword Search)을 결합한 **하이브리드 검색(Hybrid Search)** 시스템을 사용합니다.
+
+### 1. 인프라 환경 (Infrastructure)
+- **플랫폼**: Elastic Cloud (GCP - Iowa Region)
+- **엔진 버전**: Elasticsearch 9.2.1 
+- **확장 기능**:
+  - 한글 형태소 분석을 위한 `analysis-nori` 플러그인 적용 
+  - 임베딩 모델 서빙을 위한 전용 ML Node 구성 (8GB RAM, 4 vCPU)
+
+### 2. 임베딩 모델 (Embedding Model)
+- **모델명**: `intfloat__multilingual-e5-base` 
+- **배포 방식**: Elastic Cloud 내 ML Node에 모델을 배포(Deploy)하여 추론 수행 
+
+### 3. 데이터 색인 파이프라인 (Data Indexing)
+- **전처리 (Preprocessing)**
+  - 강의 자료 텍스트 추출
+  - **Chunking**: Max length 1000, Overlap 200 설정
+  - **Context Enrichment**: 각 Chunk에 파일명을 삽입하여 문맥 정보 강화
+- **Ingest Pipeline**: 수집된 텍스트(`chunk_text`)를 임베딩 벡터(`chunk_embedding`)로 변환 및 색인
+
+### 4. 검색 알고리즘 (Search Strategy)
+검색 정확도를 극대화하기 위해 **RRF (Reciprocal Rank Fusion)** 기반의 하이브리드 검색을 수행합니다
+
+1.  **Dense Search (Vector Search)**
+    - **알고리즘**: HNSW/ANN (Approximate Nearest Neighbor)
+    - **역할**: 질문의 의미적 유사성을 파악하여 문맥에 맞는 답변 검색
+2.  **Sparse Search (Keyword Search)**
+    - **알고리즘**: BM25 (with Nori Analyzer)
+    - **역할**: 고유명사나 특정 키워드의 정확한 매칭 검색
+3.  **Reranking**
+    - **방식**: RRF 알고리즘을 사용하여 Dense 결과와 Sparse 결과를 재순위화하여 최종 도출
+
 ## 🌟 특장점
 
 ### 1. 다층 검색 시스템
