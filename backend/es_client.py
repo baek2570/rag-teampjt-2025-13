@@ -1,9 +1,14 @@
+import os
+from dotenv import load_dotenv
 from elasticsearch import Elasticsearch
 
-url = "https://a30a7c8ef0bf435a9d350006622225d8.us-central1.gcp.cloud.es.io"
-api_id = "7eFayZoBmaII0WM5wUsL"
-api_key = "OfRBOxIfnESpqgMSAP39Jw"
-model_id = "intfloat__multilingual-e5-base"
+load_dotenv()
+
+url = os.getenv("ELASTIC_CLOUD_URL")
+api_id = os.getenv("ELASTIC_API_ID")
+api_key = os.getenv("ELASTIC_API_KEY")
+es_model_id = os.getenv("ELASTIC_MODEL_ID")
+
 
 
 class EsClient:
